@@ -36,7 +36,9 @@ def main():
     a = sys.argv[1:]
     as_json = "--json" in a; a = [x for x in a if x != "--json"]
     tr = a[a.index("--transcript") + 1] if "--transcript" in a else None
-    files = [x for x in a if not x.startswith("--") and x != tr]
+    # a flag's value is never the csv, wherever the flag sits on the line
+    files = [x for i, x in enumerate(a)
+             if not x.startswith("--") and not (i and a[i - 1] in ("--transcript", "--duration"))]
     if not files or not os.path.exists(files[0]): print(__doc__); sys.exit(1)
     rows = load_csv(files[0])
     if len(rows) < 8: print("could not read at least 8 data points from that csv"); sys.exit(1)
@@ -56,9 +58,13 @@ def main():
         span = xs[i] - xs[i - 1] or 1
         drops.append((d / span, xs[i - 1], xs[i], d))
     drops.sort(reverse=True)
+    # A cliff is a drop steeper than the curve's own normal bleed, not just any drop over 0.8%. On a
+    # long video sampled in coarse steps every step loses more than 0.8%, and that is slide.
+    rates = sorted(r for r, _, _, _ in drops if r > 0)
+    typical = rates[len(rates) // 2] if rates else 0
     cliffs = [{"from": round(a1, 2), "to": round(b1, 2), "lost": round(d, 2),
                "at_seconds": round(at(a1), 1) if (not pct_axis or dur) else None}
-              for _, a1, b1, d in drops[:5] if d > 0.8]
+              for r, a1, b1, d in drops[:5] if d > 0.8 and r >= 3 * typical]
     mid = [d for d, x0, _, _ in [(r[0], r[1], r[2], r[3]) for r in drops] if x0 > cutoff]
     slide = sum(mid) / len(mid) if mid else 0
     said = {}
@@ -82,7 +88,7 @@ def main():
     for c in cliffs:
         where = f"{c['at_seconds']:.0f}s" if c["at_seconds"] is not None else f"{c['from']}"
         print(f"    -{c['lost']:5.1f}%  at {where:>8}" + (f"   \"{said.get(str(c['from']),'')}\"" if said else ""))
-    if not cliffs: print("    none steeper than 0.8% - the loss is all slide, not moments")
+    if not cliffs: print("    none well above the normal bleed - the loss is all slide, not moments")
     print(f"\n  SLIDE       {slide:.3f}% per unit across the middle")
     print( "              a flat slide is pacing, not content. Cut the middle, do not rewrite it.\n")
 

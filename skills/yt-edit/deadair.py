@@ -4,9 +4,10 @@
     python3 deadair.py transcript.srt            # or .vtt, or whisper .json
     python3 deadair.py transcript.srt --floor 0.35 --json
 
-Finds three things and prints the cuts as a list you can act on, newest problem first:
+Finds four things and prints the cuts as a list you can act on, newest problem first:
   DEAD    gaps between spoken cues longer than the floor
   FILLER  cues that are only filler ("um", "so yeah", "basically")
+  RETAKE  cues where you called the restart out loud ("let me start again", "scratch that")
   REPEAT  a sentence restarted - the second take of the same opening
 
 WHAT IT DOES NOT DO. It does not cut the file. It prints an EDL, the total it would remove, and the
@@ -16,6 +17,12 @@ import json, os, re, sys
 
 FILLER_ONLY = re.compile(r"^[\s,.-]*((um+|uh+|er+|ah+|so|okay|ok|right|yeah|like|anyway|basically|"
                          r"actually|you know|i mean|let me see|hold on)[\s,.-]*)+$", re.I)
+# Said out loud between two attempts. Kept narrow on purpose: "one more time" and "from the top"
+# turn up in ordinary speech, and a false RETAKE cuts a line you meant to keep.
+RETAKE = re.compile(r"\b(let me (start|try|say|do)( that| this| it)? (again|over)|start(ing)? (again|over)|"
+                    r"take two|scratch that)\b", re.I)
+
+def skippable(t): return not t.strip() or FILLER_ONLY.match(t) or RETAKE.search(t)
 
 def parse_ts(s):
     s = s.strip().replace(",", ".")
@@ -53,6 +60,8 @@ def main():
     for i, (s, e, t) in enumerate(cues):
         if FILLER_ONLY.match(t):
             cuts.append({"kind": "FILLER", "start": s, "end": e, "why": t.strip()[:48]})
+        elif RETAKE.search(t):
+            cuts.append({"kind": "RETAKE", "start": s, "end": e, "why": t.strip()[:48]})
         if i:
             gap = s - cues[i - 1][1]
             if gap > floor:
@@ -60,11 +69,11 @@ def main():
                 cuts.append({"kind": "DEAD", "start": round(cues[i - 1][1] + keep, 3),
                              "end": round(s - keep, 3), "why": f"{gap:.2f}s gap"})
         # A restart is compared against the last cue that was actually SPEECH. Comparing against
-        # the literal previous cue misses every retake with an "um" between the two attempts, which
-        # is most of them.
-        if t.strip() and not FILLER_ONLY.match(t):
+        # the literal previous cue misses every retake with an "um" or a "let me start again" between
+        # the two attempts, which is most of them.
+        if not skippable(t):
             j = i - 1
-            while j >= 0 and (FILLER_ONLY.match(cues[j][2]) or not cues[j][2].strip()): j -= 1
+            while j >= 0 and skippable(cues[j][2]): j -= 1
             if j >= 0:
                 a1, b1 = norm(cues[j][2])[:5], norm(t)[:5]
                 if len(a1) >= 3 and a1 == b1:
